@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Google Maps verileri için hızlı etiketleme ve kategorizasyon aracı. Otomatik screenshot alma, buffer sistemi ve klavye odaklı arayüz." />
+  <title>Proje V1 — Google Maps Etiketleme Aracı</title>
+  <link rel="stylesheet" href="/static/style.css?v=20260730-2" />
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ═══ HEADER ═══════════════════════════════════════════════════════════ -->
+  <header id="header">
+    <div class="header-brand">
+      <div class="brand-icon">📍</div>
+      <div>
+        <h1>Maps Etiketleyici</h1>
+        <div class="brand-sub">Google Maps Kategorizasyon Aracı</div>
+      </div>
+    </div>
+
+    <!-- Progress -->
+    <div id="progress-section">
+      <div id="progress-bar-wrapper">
+        <div id="progress-bar-fill"></div>
+      </div>
+      <span id="progress-text">—</span>
+      <!-- Buffer Göstergesi -->
+      <div id="buffer-indicator">
+        <span>Buf:</span>
+        <div class="buffer-dots" id="buffer-dots">
+          <div class="buffer-dot" data-dot="0"></div>
+          <div class="buffer-dot" data-dot="1"></div>
+          <div class="buffer-dot" data-dot="2"></div>
+          <div class="buffer-dot" data-dot="3"></div>
+          <div class="buffer-dot" data-dot="4"></div>
+          <div class="buffer-dot" data-dot="5"></div>
+          <div class="buffer-dot" data-dot="6"></div>
+          <div class="buffer-dot" data-dot="7"></div>
+          <div class="buffer-dot" data-dot="8"></div>
+          <div class="buffer-dot" data-dot="9"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <a href="/edit" class="btn-icon btn-nav" style="text-decoration: none; display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; padding: 6px 12px; background: rgba(99, 102, 241, 0.15); color: var(--accent); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 8px;" title="Düzenleme Akışına Geç">✏️ Düzenle</a>
+      <button class="btn-icon btn-nav" id="back-btn" title="Önceki kayda dön (Alt + Sol Ok)" disabled>← Geri</button>
+      <button class="btn-icon" id="open-url-btn" title="Haritayı tarayıcıda aç" disabled>🔗</button>
+      <button class="btn-icon" id="skip-btn" title="Bu kaydı atla (boş geç)" disabled>⏭</button>
+    </div>
+  </header>
+
+  <!-- ═══ MAIN ═══════════════════════════════════════════════════════════════ -->
+  <main id="main-content">
+
+    <!-- Screenshot Paneli -->
+    <section id="screenshot-panel">
+      <div id="screenshot-container">
+
+        <!-- Başlangıç Ekranı -->
+        <div id="start-screen">
+          <div class="start-icon">🚀</div>
+          <h2 class="start-title">Etiketlemeye Başla</h2>
+          <p class="start-subtitle">
+            Excel dosyası okunacak, Google Maps sayfaları arka planda yüklenecek
+            ve size anında sunulacak.
+          </p>
+          <label class="start-index-field" for="start-index-input">
+            <span>Başlangıç indeksi</span>
+            <input id="start-index-input" type="text" value="0" autocomplete="off" />
+          </label>
+          <button id="start-btn">
+            <span>▶</span> Oturumu Başlat
+          </button>
+          <div style="margin-top: 14px; text-align: center;">
+            <a href="/edit" style="color: var(--accent); font-size: 13px; text-decoration: none; opacity: 0.9; transition: opacity 0.2s;">
+              ✏️ KONTROL kolonlu kayıtları düzenlemek için: <strong>Düzenle Moduna Geç →</strong>
+            </a>
+          </div>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div id="loading-overlay" class="hidden">
+          <div class="spinner"></div>
+          <div class="loading-text" id="loading-text">Screenshot hazırlanıyor...</div>
+        </div>
+
+        <!-- Hata rozeti -->
+        <div id="error-badge"></div>
+
+        <!-- Screenshot -->
+        <img id="screenshot-img" alt="Google Maps Screenshot" />
+      </div>
+    </section>
+
+    <!-- Sağ Bilgi Paneli -->
+    <aside id="info-panel">
+
+      <!-- İşletme Bilgisi -->
+      <div class="info-card">
+        <div class="info-card-label">İşletme</div>
+        <div class="business-name" id="business-name">—</div>
+        <div class="url-preview" id="url-preview" title="Tıkla: URL'yi kopyala">—</div>
+      </div>
+
+      <!-- İstatistikler -->
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="stat-value" id="stat-current">—</div>
+          <div class="stat-label">Mevcut</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="stat-remaining">—</div>
+          <div class="stat-label">Kalan</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="stat-done">0</div>
+          <div class="stat-label">Tamamlandı</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="stat-total">—</div>
+          <div class="stat-label">Toplam</div>
+        </div>
+      </div>
+
+      <!-- Klavye Kısayolları -->
+      <div class="shortcuts-section">
+        <div class="shortcut-title">Kısayollar</div>
+        <div class="shortcut-list">
+          <div class="shortcut-item">
+            <span>Kaydet & İlerle</span>
+            <span class="kbd">Enter</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Kaydet & İlerle</span>
+            <span class="kbd">→ Sağ Ok</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Atla (boş)</span>
+            <span class="kbd">Ctrl + →</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Geri dön</span>
+            <span class="kbd">Alt + ←</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Daha sonra</span>
+            <span class="kbd">Ctrl + D</span>
+          </div>
+          <div class="shortcut-item">
+            <span>Haritayı Aç</span>
+            <span class="kbd">Ctrl + O</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Daha Sonra İşaretlenecekler -->
+      <div class="deferred-section">
+        <div class="section-heading-row">
+          <div class="history-title">Daha Sonra İşaretlenecekler</div>
+          <span class="deferred-count" id="deferred-count">0</span>
+        </div>
+        <div class="deferred-list" id="deferred-list">
+          <p class="empty-list-message">Liste boş</p>
+        </div>
+      </div>
+
+      <!-- Son Etiketlenenler -->
+      <div class="history-section">
+        <div class="history-title">Son Etiketlenenler</div>
+        <div class="history-list" id="history-list">
+          <p style="font-size:12px; color: var(--text-muted); text-align:center; margin-top: 20px;">
+            Henüz kayıt yok
+          </p>
+        </div>
+      </div>
+
+    </aside>
+  </main>
+
+  <!-- ═══ BOTTOM BAR ═══════════════════════════════════════════════════════ -->
+  <footer id="bottom-bar">
+    <div id="inputs-row">
+      <div class="input-group input-group--main">
+        <label class="input-label" for="category-input">Kategori</label>
+        <div class="input-field-wrapper">
+          <input
+            type="text"
+            id="category-input"
+            placeholder="Kategori girin..."
+            autocomplete="off"
+            autocorrect="off"
+            spellcheck="false"
+            disabled
+          />
+          <span class="input-suffix" id="input-suffix">Enter ↵</span>
+        </div>
+      </div>
+
+      <div class="input-group">
+        <label class="input-label" for="extra-cikarilacak">Çıkarılacak Noktalar</label>
+        <div class="input-field-wrapper">
+          <input
+            type="text"
+            id="extra-cikarilacak"
+            placeholder="Çıkarılacak noktalar..."
+            autocomplete="off"
+            autocorrect="off"
+            spellcheck="false"
+            disabled
+          />
+        </div>
+      </div>
+
+      <div class="input-group">
+        <label class="input-label" for="extra-acik-kapali">Açık Kapalı Kontrol</label>
+        <div class="input-field-wrapper">
+          <input
+            type="text"
+            id="extra-acik-kapali"
+            placeholder="Açık/Kapalı..."
+            autocomplete="off"
+            autocorrect="off"
+            spellcheck="false"
+            disabled
+          />
+        </div>
+      </div>
+
+      <div class="input-group">
+        <label class="input-label" for="extra-pasif">Pasif</label>
+        <div class="input-field-wrapper">
+          <input
+            type="text"
+            id="extra-pasif"
+            placeholder="Pasif..."
+            autocomplete="off"
+            autocorrect="off"
+            spellcheck="false"
+            disabled
+          />
+        </div>
+      </div>
+    </div>
+
+    <div class="bottom-actions">
+      <button class="btn btn-secondary btn-defer" id="defer-btn" disabled>
+        ⏱ Daha Sonra İşaretle
+      </button>
+      <button class="btn btn-primary" id="submit-btn" disabled>
+        Kaydet &amp; İlerle →
+      </button>
+    </div>
+  </footer>
+
+</div>
+
+<!-- Tamamlandı Ekranı -->
+<div id="completed-screen">
+  <div class="completed-icon">🎉</div>
+  <div class="completed-title">Tüm Kayıtlar Tamamlandı!</div>
+  <div class="completed-sub" id="completed-sub">Excel dosyası güncellendi.</div>
+  <button class="btn btn-primary" onclick="location.reload()" style="margin-top:8px">
+    🔄 Yeniden Başlat
+  </button>
+</div>
+
+<!-- Toast Container -->
+<div id="toast-container"></div>
+
+<script src="/static/app.js?v=20260730-2"></script>
+</body>
+</html>

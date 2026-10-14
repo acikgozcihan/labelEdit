@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Google Maps kayıtlarını düzenle: KONTROL kolonlu satırları incele, Sil, Atla veya Tut." />
+  <title>Maps Düzenleyici — KONTROL Kolonu</title>
+  <link rel="stylesheet" href="/static/style.css?v=20261013-edit" />
+  <style>
+    /* Düzenle Akışı Özel Stilleri */
+    .edit-action-bar {
+      display: flex;
+      gap: 14px;
+      padding: 18px 24px;
+      background: var(--surface-2);
+      border-top: 1px solid var(--border);
+      justify-content: center;
+      align-items: center;
+    }
+    .btn-delete {
+      flex: 1; max-width: 200px; padding: 16px 20px;
+      font-size: 15px; font-weight: 700; border-radius: 12px;
+      border: none; cursor: pointer; transition: all 0.2s ease;
+      background: linear-gradient(135deg, #ff4757, #c0392b);
+      color: #fff; letter-spacing: 0.5px;
+    }
+    .btn-delete:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(255,71,87,0.4); }
+    .btn-delete:active:not(:disabled) { transform: translateY(0); }
+    .btn-delete:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-skip {
+      flex: 1; max-width: 200px; padding: 16px 20px;
+      font-size: 15px; font-weight: 700; border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.15); cursor: pointer; transition: all 0.2s ease;
+      background: linear-gradient(135deg, #475569, #334155);
+      color: #f1f5f9; letter-spacing: 0.5px;
+    }
+    .btn-skip:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(71,85,105,0.4); background: linear-gradient(135deg, #64748b, #475569); }
+    .btn-skip:active:not(:disabled) { transform: translateY(0); }
+    .btn-skip:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-keep {
+      flex: 1; max-width: 200px; padding: 16px 20px;
+      font-size: 15px; font-weight: 700; border-radius: 12px;
+      border: none; cursor: pointer; transition: all 0.2s ease;
+      background: linear-gradient(135deg, #2ed573, #1abc9c);
+      color: #fff; letter-spacing: 0.5px;
+    }
+    .btn-keep:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(46,213,115,0.4); }
+    .btn-keep:active:not(:disabled) { transform: translateY(0); }
+    .btn-keep:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .kontrol-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 14px;
+      background: linear-gradient(135deg, rgba(255,165,0,0.15), rgba(255,140,0,0.1));
+      border: 1px solid rgba(255,165,0,0.4);
+      border-radius: 8px; color: #ffb347;
+      font-size: 13px; font-weight: 600;
+      width: 100%; box-sizing: border-box; word-break: break-word;
+    }
+    .kontrol-badge-icon { font-size: 16px; flex-shrink: 0; }
+
+    .edit-history-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 12px; border-radius: 8px; margin-bottom: 4px;
+      font-size: 12px; background: var(--surface-3); gap: 8px;
+    }
+    .edit-history-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+    .edit-history-action { font-weight: 700; font-size: 11px; padding: 2px 8px; border-radius: 4px; flex-shrink: 0; }
+    .edit-history-action.deleted { background: rgba(255,71,87,0.2); color: #ff4757; }
+    .edit-history-action.kept { background: rgba(46,213,115,0.2); color: #2ed573; }
+    .edit-history-action.skipped { background: rgba(148,163,184,0.2); color: #94a3b8; }
+
+    .action-shortcut-hint { font-size: 11px; color: var(--text-muted); text-align: center; padding: 6px 0 10px; }
+    .kontrol-section { margin-bottom: 12px; }
+    .kontrol-label-text { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; }
+
+    .back-link {
+      display: inline-flex; align-items: center; gap: 6px;
+      color: var(--text-muted); font-size: 12px; text-decoration: none;
+      padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border);
+      transition: all 0.2s;
+    }
+    .back-link:hover { color: var(--text-primary); border-color: var(--accent); background: rgba(99,102,241,0.08); }
+
+    .next-preview-card {
+      border-left: 3px solid #6366f1;
+      background: rgba(99, 102, 241, 0.08);
+      margin-bottom: 12px;
+      padding: 10px 14px;
+      border-radius: 8px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="app">
+
+  <!-- HEADER -->
+  <header id="header">
+    <div class="header-brand">
+      <div class="brand-icon">&#9999;&#65039;</div>
+      <div>
+        <h1>Maps Düzenleyici</h1>
+        <div class="brand-sub">KONTROL Kolonu &mdash; Sil / Atla / Tut</div>
+      </div>
+    </div>
+
+    <div id="progress-section">
+      <div id="progress-bar-wrapper"><div id="progress-bar-fill"></div></div>
+      <span id="progress-text">&mdash;</span>
+      <div id="buffer-indicator">
+        <span>Buf:</span>
+        <div class="buffer-dots" id="buffer-dots">
+          <div class="buffer-dot" data-dot="0"></div>
+          <div class="buffer-dot" data-dot="1"></div>
+          <div class="buffer-dot" data-dot="2"></div>
+          <div class="buffer-dot" data-dot="3"></div>
+          <div class="buffer-dot" data-dot="4"></div>
+          <div class="buffer-dot" data-dot="5"></div>
+          <div class="buffer-dot" data-dot="6"></div>
+          <div class="buffer-dot" data-dot="7"></div>
+          <div class="buffer-dot" data-dot="8"></div>
+          <div class="buffer-dot" data-dot="9"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="header-actions">
+      <button class="btn-icon btn-nav" id="back-btn" title="Önceki kayda dön (Alt + Sol Ok)" disabled>← Geri</button>
+      <a href="/api/edit/export" class="back-link" id="export-btn" download title="Veritabanındaki güncel hali Excel olarak indir">&#128190; Excel'e Aktar</a>
+      <a href="/" class="back-link" title="Etiketleme sayfasına dön">&larr; Etiketleme</a>
+      <button class="btn-icon" id="open-url-btn" title="Haritayı tarayıcıda aç" disabled>&#128279;</button>
+    </div>
+  </header>
+
+  <!-- MAIN -->
+  <main id="main-content">
+
+    <section id="screenshot-panel">
+      <div id="screenshot-container">
+
+        <!-- Başlangıç Ekranı -->
+        <div id="start-screen">
+          <div class="start-icon">&#9999;&#65039;</div>
+          <h2 class="start-title">Düzenlemeye Başla</h2>
+          <p class="start-subtitle">
+            KONTROL kolonu dolu satırlar incelenir. Her kayıt için
+            <strong style="color:#ff4757">Sil</strong>,
+            <strong style="color:#94a3b8">Atla</strong> veya
+            <strong style="color:#2ed573">Tut</strong> kararı verin.
+          </p>
+          <label class="start-index-field" for="start-index-input">
+            <span>Başlangıç indeksi</span>
+            <input id="start-index-input" type="text" value="0" autocomplete="off" />
+          </label>
+          <button id="start-btn">
+            <span>&#9654;</span> Oturumu Başlat
+          </button>
+        </div>
+
+        <!-- Loading -->
+        <div id="loading-overlay" class="hidden">
+          <div class="spinner"></div>
+          <div class="loading-text" id="loading-text">Harita yükleniyor...</div>
+        </div>
+
+        <div id="error-badge"></div>
+        <img id="screenshot-img" alt="Google Maps Screenshot" />
+      </div>
+    </section>
+
+    <!-- Sağ Bilgi Paneli -->
+    <aside id="info-panel">
+
+      <div class="info-card">
+        <div class="info-card-label">İşletme</div>
+        <div class="business-name" id="business-name">&mdash;</div>
+        <div class="url-preview" id="url-preview" title="Tıkla: URL'yi kopyala">&mdash;</div>
+      </div>
+
+      <!-- Sonraki Mekan Önizleme Kartı -->
+      <div class="next-preview-card" id="next-preview-card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 4px;">
+          <span style="font-size:11px; font-weight:700; color:#818cf8; text-transform:uppercase; letter-spacing:0.6px;">⏭️ Sıradaki Mekan</span>
+          <span style="font-size:10px; background:rgba(99,102,241,0.25); color:#c7d2fe; padding:1px 6px; border-radius:4px;">Önizleme</span>
+        </div>
+        <div id="next-business-name" style="font-size:13px; font-weight:600; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+          &mdash;
+        </div>
+      </div>
+
+      <!-- KONTROL Değeri -->
+      <div class="info-card kontrol-section">
+        <div class="kontrol-label-text">Kontrol Notu</div>
+        <div class="kontrol-badge" id="kontrol-badge">
+          <span class="kontrol-badge-icon">&#128203;</span>
+          <span id="kontrol-value-text">&mdash;</span>
+        </div>
+      </div>
+
+      <!-- İstatistikler -->
+      <div class="stats-grid" style="grid-template-columns: repeat(5, 1fr);">
+        <div class="stat-item">
+          <div class="stat-value" id="stat-current">&mdash;</div>
+          <div class="stat-label">Mevcut</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="stat-remaining">&mdash;</div>
+          <div class="stat-label">Kalan</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="stat-deleted" style="color:#ff4757;">0</div>
+          <div class="stat-label">Silindi</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="stat-skipped" style="color:#94a3b8;">0</div>
+          <div class="stat-label">Atlandı</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="stat-kept" style="color:#2ed573;">0</div>
+          <div class="stat-label">Tutuldu</div>
+        </div>
+      </div>
+
+      <!-- Kısayollar -->
+      <div class="shortcuts-section">
+        <div class="shortcut-title">Kısayollar</div>
+        <div class="shortcut-list">
+          <div class="shortcut-item"><span>Sil</span><span class="kbd">Delete / &larr; Sol Ok</span></div>
+          <div class="shortcut-item"><span>Atla</span><span class="kbd">Space / &uarr; Yukarı Ok</span></div>
+          <div class="shortcut-item"><span>Tut</span><span class="kbd">Enter / &rarr; Sağ Ok</span></div>
+          <div class="shortcut-item"><span>Geri Dön</span><span class="kbd">Alt + &larr; / Backspace</span></div>
+          <div class="shortcut-item"><span>Haritayı Aç</span><span class="kbd">Ctrl + O</span></div>
+        </div>
+      </div>
+
+      <!-- Geçmiş -->
+      <div class="history-section">
+        <div class="history-title">Son İşlemler</div>
+        <div class="history-list" id="history-list">
+          <p style="font-size:12px; color: var(--text-muted); text-align:center; margin-top: 20px;">
+            Henüz işlem yapılmadı
+          </p>
+        </div>
+      </div>
+
+    </aside>
+  </main>
+
+  <!-- BOTTOM BAR -->
+  <footer id="bottom-bar" style="padding: 0;">
+    <div class="edit-action-bar">
+      <button class="btn-delete" id="delete-btn" disabled>&#128465; Sil</button>
+      <button class="btn-skip" id="skip-btn" disabled>⏭ Atla</button>
+      <button class="btn-keep" id="keep-btn" disabled>&#10003; Tut</button>
+    </div>
+    <p class="action-shortcut-hint" id="action-hint">Oturumu başlatın...</p>
+  </footer>
+
+</div>
+
+<!-- Tamamlandı Ekranı -->
+<div id="completed-screen">
+  <div class="completed-icon">&#127881;</div>
+  <div class="completed-title">Tüm Kayıtlar İşlendi!</div>
+  <div class="completed-sub" id="completed-sub">Değişiklikler veritabanına kaydedildi.</div>
+  <div style="display:flex;gap:12px;justify-content:center;margin-top:8px;">
+    <a href="/api/edit/export" download class="btn btn-primary" style="text-decoration:none;display:inline-flex;align-items:center;">&#128190; Excel'e Aktar</a>
+    <button class="btn btn-primary" onclick="location.reload()">&#128260; Yeniden Başlat</button>
+    <a href="/" class="btn btn-secondary" style="text-decoration:none;display:inline-flex;align-items:center;">&larr; Etiketlemeye Dön</a>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+<script src="/static/edit_app.js?v=20261013-v2"></script>
+</body>
+</html>
