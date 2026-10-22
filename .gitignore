@@ -7,3 +7,7 @@ sessions/
 
 # Gecici ekran goruntuleri
 screenshots/
+
+# SQLite gecici WAL/SHM dosyalari
+*.db-wal
+*.db-shm

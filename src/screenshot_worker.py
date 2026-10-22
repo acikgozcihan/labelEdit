@@ -1,25 +1,31 @@
 """
-Proje V1 — Screenshot Worker (Thread-pool + asyncio.Queue Buffer)
-Playwright işlemleri ThreadPoolExecutor'da (sync), buffer asyncio.Queue'de.
-SOLID: Single Responsibility — sadece screenshot alma ve buffer yönetimi.
+Proje V1 — Screenshot Worker (sıralı prefetch penceresi)
+
+Kullanıcının önündeki BUFFER_SIZE kayıt CaptureEngine'e eş zamanlı gönderilir;
+sonuçlar hangi sırayla biterse bitsin kullanıcıya her zaman kayıt sırasıyla
+sunulur. Eski public API (start / stop / get_next / queue_size / is_empty /
+get_stats) korunmuştur.
 """
+from __future__ import annotations
+
 import asyncio
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Optional
 
-from config import BUFFER_SIZE
+from config import BUFFER_SIZE, GET_NEXT_TIMEOUT
+from data_model import CaptureOutcome, PlaceRecord
 from session_manager import SessionManager
 
 logger = logging.getLogger(__name__)
 
+LOOKAHEAD_FACTOR = 4
+
 
 @dataclass
 class ScreenshotItem:
-    """Buffer'daki tek bir screenshot kaydı."""
+    """Kullanıcıya sunulan tek bir ekran görüntüsü kaydı."""
     row_index: int
     position: int
     url: str
@@ -28,141 +34,124 @@ class ScreenshotItem:
     total: int
     taken_at: float = field(default_factory=time.time)
     error: Optional[str] = None
+    from_cache: bool = False
 
 
 class ScreenshotWorker:
-    """
-    Buffer sistemi:
-    - asyncio.Queue(BUFFER_SIZE) → max 10 item tutar
-    - ThreadPoolExecutor → Playwright sync işlemlerini ayrı thread'de çalıştırır
-    - _producer_task → asyncio task, kuyruk dolu değilse yeni screenshot tetikler
-    """
-
-    def __init__(self, session_manager: SessionManager) -> None:
+    def __init__(self, session_manager: SessionManager, window: int = BUFFER_SIZE) -> None:
         self._session = session_manager
-        self._queue: asyncio.Queue[ScreenshotItem] = asyncio.Queue(maxsize=BUFFER_SIZE)
-        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="screenshot")
-        self._pending_records: list[dict] = []
-        self._current_fetch_index: int = 0
-        self._producer_task: Optional[asyncio.Task] = None
-        self._running: bool = False
-        self._served_items: list[ScreenshotItem] = []
-        self._stats = {"taken": 0, "errors": 0}
+        self._window = max(1, window)
+        self._records: list[PlaceRecord] = []
+        self._tasks: dict[int, asyncio.Future] = {}
+        self._next_serve = 0
+        self._next_schedule = 0
+        self._running = False
+        self._stats = {"taken": 0, "errors": 0, "cache_hits": 0, "timeouts": 0}
+
+    # Geriye dönük uyumluluk: main.py eski sürümde bu alanı okuyordu
+    @property
+    def _pending_records(self) -> list[dict]:
+        return [r.to_dict() for r in self._records]
 
     # ── Başlatma / Durdurma ──────────────────────────────────────────────────
-
-    async def start(self, records: list[dict]) -> None:
-        self._pending_records = records
-        self._current_fetch_index = 0
+    async def start(self, records: list) -> None:
+        self._records = [r if isinstance(r, PlaceRecord) else PlaceRecord.from_dict(r) for r in records]
+        self._next_serve = 0
+        self._next_schedule = 0
         self._running = True
-        self._producer_task = asyncio.create_task(
-            self._producer_loop(), name="screenshot-producer"
-        )
-        logger.info(f"ScreenshotWorker başlatıldı. Toplam: {len(records)}")
+        self._fill()
+        logger.info(f"ScreenshotWorker başlatıldı. Toplam: {len(self._records)}, pencere: {self._window}")
 
     async def stop(self) -> None:
         self._running = False
-        if self._producer_task and not self._producer_task.done():
-            self._producer_task.cancel()
-            try:
-                await self._producer_task
-            except asyncio.CancelledError:
-                pass
-        # Kuyruktaki dosyaları temizle
-        while not self._queue.empty():
-            try:
-                item = self._queue.get_nowait()
-                _cleanup_file(item.file_path)
-            except asyncio.QueueEmpty:
-                break
-        for item in self._served_items:
-            _cleanup_file(item.file_path)
-        self._served_items.clear()
-        self._executor.shutdown(wait=False)
+        for t in self._tasks.values():
+            t.remove_done_callback(self._fill)
+            t.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+        self._tasks.clear()
         logger.info(f"ScreenshotWorker durduruldu. Stats: {self._stats}")
 
-    # ── Public API ───────────────────────────────────────────────────────────
+    def _fill(self, *_: object) -> None:
+        """
+        Pencere = aynı anda en fazla `window` AKTİF yakalama (sıra sayısı değil).
+        Sıradaki kayıt yavaşsa (ör. zaman aşımı) hat durmaz; ileri bakış en fazla
+        LOOKAHEAD_FACTOR × window sıraya kadar devam eder. Biten görevler
+        callback ile pencereyi yeniden doldurur.
+        """
+        engine = self._session.engine
+        if not self._running or engine is None:
+            return
+        limit = min(len(self._records), self._next_serve + self._window * LOOKAHEAD_FACTOR)
+        active = sum(1 for t in self._tasks.values() if not t.done())
+        self._next_schedule = max(self._next_schedule, self._next_serve)
+        while self._next_schedule < limit and active < self._window:
+            pos = self._next_schedule
+            self._next_schedule += 1
+            if pos in self._tasks:
+                continue
+            task = asyncio.ensure_future(engine.capture(self._records[pos]))
+            task.add_done_callback(self._fill)
+            self._tasks[pos] = task
+            active += 1
 
+    # ── Public API ───────────────────────────────────────────────────────────
     async def get_next(self) -> Optional[ScreenshotItem]:
-        """Sıradaki screenshot'ı döndürür (buffer'dan anlık)."""
-        try:
-            item = await asyncio.wait_for(self._queue.get(), timeout=60.0)
-            self._queue.task_done()
-            self._served_items.append(item)
-            return item
-        except asyncio.TimeoutError:
-            logger.error("get_next timeout — 60s içinde item gelmedi.")
+        if self._next_serve >= len(self._records):
             return None
+        pos = self._next_serve
+        self._next_serve += 1
+        rec = self._records[pos]
+        task = self._tasks.pop(pos, None)
+        self._fill()
+        if task is None:   # pencere dışı (olmamalı) → doğrudan iste
+            task = asyncio.ensure_future(self._session.engine.capture(rec))
+        try:
+            out: CaptureOutcome = await asyncio.wait_for(asyncio.shield(task), timeout=GET_NEXT_TIMEOUT)
+        except asyncio.TimeoutError:
+            # Yakalama arka planda sürer ve tamamlanınca önbelleğe yazılır
+            self._stats["timeouts"] += 1
+            out = CaptureOutcome(rec.place_key, rec.url,
+                                 error=f"{GET_NEXT_TIMEOUT:.0f} sn içinde hazırlanamadı (arka planda deneniyor)")
+        except asyncio.CancelledError:
+            if not self._running:
+                raise
+            out = CaptureOutcome(rec.place_key, rec.url, error="İptal edildi")
+        except Exception as e:
+            out = CaptureOutcome(rec.place_key, rec.url, error=str(e)[:200])
+
+        if out.ok:
+            self._stats["taken"] += 1
+            if out.from_cache:
+                self._stats["cache_hits"] += 1
+        else:
+            self._stats["errors"] += 1
+        return ScreenshotItem(
+            row_index=rec.row_index, position=rec.position, url=rec.url, name=rec.name,
+            file_path=out.file_path or "", total=rec.total, error=out.error, from_cache=out.from_cache,
+        )
+
+    def peek_record(self, position: int) -> Optional[PlaceRecord]:
+        return self._records[position] if 0 <= position < len(self._records) else None
 
     def queue_size(self) -> int:
-        return self._queue.qsize()
+        """Kullanıcının önünde HAZIR bekleyen kayıt sayısı (arayüzdeki buffer noktaları)."""
+        n = 0
+        for pos in range(self._next_serve, min(len(self._records), self._next_serve + self._window)):
+            t = self._tasks.get(pos)
+            if t is None or not t.done():
+                break
+            n += 1
+        return n
 
     def is_empty(self) -> bool:
-        return self._queue.empty() and self._current_fetch_index >= len(self._pending_records)
+        return self._next_serve >= len(self._records)
 
     def get_stats(self) -> dict:
-        return {**self._stats, "queue_size": self._queue.qsize(), "fetch_index": self._current_fetch_index}
-
-    # ── Producer Loop ────────────────────────────────────────────────────────
-
-    async def _producer_loop(self) -> None:
-        """Sürekli çalışır: kuyrukta yer açıldığında yeni screenshot alır."""
-        logger.info("Producer loop başladı.")
-        loop = asyncio.get_event_loop()
-
-        while self._running and self._current_fetch_index < len(self._pending_records):
-            if self._queue.full():
-                await asyncio.sleep(0.3)
-                continue
-
-            record = self._pending_records[self._current_fetch_index]
-            self._current_fetch_index += 1
-
-            # Playwright sync işlemini thread'de çalıştır
-            try:
-                result = await loop.run_in_executor(
-                    self._executor,
-                    self._session.take_screenshot,
-                    record,
-                )
-                item = ScreenshotItem(
-                    row_index=result["row_index"],
-                    position=result["position"],
-                    url=result["url"],
-                    name=result["name"],
-                    file_path=result.get("file_path", ""),
-                    total=result["total"],
-                    error=result.get("error"),
-                )
-                if item.error:
-                    self._stats["errors"] += 1
-                else:
-                    self._stats["taken"] += 1
-
-                await self._queue.put(item)
-                logger.info(
-                    f"[Buffer] pos:{item.position}/{item.total} | "
-                    f"qsize:{self._queue.qsize()} | err:{item.error is not None}"
-                )
-            except Exception as e:
-                logger.error(f"Producer hatası — {record.get('url','?')[:50]}: {e}")
-                self._stats["errors"] += 1
-                # Hata item'ı kuyruğa ekle (kullanıcı atlanmadan devam etsin)
-                await self._queue.put(ScreenshotItem(
-                    row_index=record["row_index"],
-                    position=record["position"],
-                    url=record["url"],
-                    name=record["name"],
-                    file_path="",
-                    total=record["total"],
-                    error=str(e)[:200],
-                ))
-
-        logger.info("Producer loop tamamlandı.")
-
-
-def _cleanup_file(file_path: str) -> None:
-    if file_path:
-        p = Path(file_path)
-        if p.exists():
-            p.unlink(missing_ok=True)
+        engine = self._session.engine
+        return {
+            **self._stats,
+            "queue_size": self.queue_size(),
+            "fetch_index": self._next_schedule,
+            "engine": engine.stats() if engine else None,
+        }
